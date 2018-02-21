@@ -44,6 +44,9 @@ class Net {
     return Forward(loss);
   }
 
+  //FIX reinit
+  void reinitInputBlob();
+
   /**
    * The From and To variants of Forward and Backward operate on the
    * (topological) ordering by which the net is specified. For general DAG

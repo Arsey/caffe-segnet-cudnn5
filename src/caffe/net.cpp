@@ -553,6 +553,18 @@ Dtype Net<Dtype>::ForwardFromTo(int start, int end) {
   }
   return loss;
 }
+//FIX reinit
+template <typename Dtype>
+void Net<Dtype>::reinitInputBlob() {
+
+	  int size = layers_.size();
+
+	  for (int i = 0; i < size; ++i) {
+	    layers_[i]->reInitInputLayer();
+	  }
+
+}
+
 
 template <typename Dtype>
 Dtype Net<Dtype>::ForwardFrom(int start) {

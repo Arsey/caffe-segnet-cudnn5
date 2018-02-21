@@ -50,7 +50,9 @@ void DenseImageDataLayer<Dtype>::DataLayerSetUp(const vector<Blob<Dtype>*>& bott
   std::ifstream infile(source.c_str());
   string filename;
   string label_filename;
+
   while (infile >> filename >> label_filename) {
+	  LOG(INFO) << "File name " << filename;
     lines_.push_back(std::make_pair(filename, label_filename));
   }
 
@@ -72,8 +74,9 @@ void DenseImageDataLayer<Dtype>::DataLayerSetUp(const vector<Blob<Dtype>*>& bott
     CHECK_GT(lines_.size(), skip) << "Not enough points to skip";
     lines_id_ = skip;
   }
-
+  LOG(INFO) << "root_folder =" << (root_folder + lines_[lines_id_].first);
   // Read an image, and use it to initialize the top blobs.
+  LOG(INFO) << "File name 1 =  " << lines_[lines_id_].first;
   cv::Mat cv_img = ReadImageToCVMat(root_folder + lines_[lines_id_].first,
                                     new_height, new_width, is_color);
   const int channels = cv_img.channels();
@@ -81,6 +84,7 @@ void DenseImageDataLayer<Dtype>::DataLayerSetUp(const vector<Blob<Dtype>*>& bott
   const int width = cv_img.cols;
 
   // sanity check label image
+  LOG(INFO) << "File name 2 =" << (root_folder + lines_[lines_id_].second);
   cv::Mat cv_lab = ReadImageToCVMat(root_folder + lines_[lines_id_].second,
                                     new_height, new_width, false, true);
   CHECK(cv_lab.channels() == 1) << "Can only handle grayscale label images";
@@ -124,6 +128,110 @@ void DenseImageDataLayer<Dtype>::ShuffleImages() {
   caffe::rng_t* prefetch_rng =
       static_cast<caffe::rng_t*>(prefetch_rng_->generator());
   shuffle(lines_.begin(), lines_.end(), prefetch_rng);
+}
+//FIX reinit
+template <typename Dtype>
+void DenseImageDataLayer<Dtype>::reInitInputLayer()
+{
+	std::cout << "enter reInitInputLayer" << std::endl;
+
+	  CPUTimer batch_timer;
+	  batch_timer.Start();
+	  double read_time = 0;
+	  double trans_time = 0;
+	  CPUTimer timer;
+	  CHECK(this->prefetch_data_.count());
+	  CHECK(this->transformed_data_.count());
+	  DenseImageDataParameter dense_image_data_param = this->layer_param_.dense_image_data_param();
+	  const int batch_size = dense_image_data_param.batch_size();
+	  const int new_height = dense_image_data_param.new_height();
+	  const int new_width = dense_image_data_param.new_width();
+	  const int crop_height = dense_image_data_param.crop_height();
+	  const int crop_width  = dense_image_data_param.crop_width();
+	  const int crop_size = this->layer_param_.transform_param().crop_size();
+	  const bool is_color = dense_image_data_param.is_color();
+	  string root_folder = dense_image_data_param.root_folder();
+
+	  // Reshape on single input batches for inputs of varying dimension.
+	  if (batch_size == 1 && crop_size == 0 && new_height == 0 && new_width == 0 && crop_height == 0 && crop_width == 0) {
+	    cv::Mat cv_img = ReadImageToCVMat(root_folder + lines_[lines_id_].first,
+	        0, 0, is_color);
+	    this->prefetch_data_.Reshape(1, cv_img.channels(),
+	        cv_img.rows, cv_img.cols);
+	    this->transformed_data_.Reshape(1, cv_img.channels(),
+	        cv_img.rows, cv_img.cols);
+	    this->prefetch_label_.Reshape(1, 1, cv_img.rows, cv_img.cols);
+	    this->transformed_label_.Reshape(1, 1, cv_img.rows, cv_img.cols);
+	  }
+	  Dtype* prefetch_data = this->prefetch_data_.mutable_cpu_data();
+	  Dtype* prefetch_label = this->prefetch_label_.mutable_cpu_data();
+	  // datum scales
+	  const int lines_size = lines_.size();
+	  for (int item_id = 0; item_id < batch_size; ++item_id) {
+	    // get a blob
+	    timer.Start();
+	    CHECK_GT(lines_size, lines_id_);
+	    cv::Mat cv_img = ReadImageToCVMat(root_folder + lines_[lines_id_].first,
+	        new_height, new_width, is_color);
+	    CHECK(cv_img.data) << "Could not load " << lines_[lines_id_].first;
+	    cv::Mat cv_lab = ReadImageToCVMat(root_folder + lines_[lines_id_].second,
+	        new_height, new_width, false, true);
+	    CHECK(cv_lab.data) << "Could not load " << lines_[lines_id_].second;
+	    read_time += timer.MicroSeconds();
+	    timer.Start();
+	    // Apply random horizontal mirror of images
+	    if (this->layer_param_.dense_image_data_param().mirror()) {
+	      const bool do_mirror = caffe_rng_rand() % 2;
+	      if (do_mirror) {
+	        cv::flip(cv_img,cv_img,1);
+	        cv::flip(cv_lab,cv_lab,1);
+	      }
+	    }
+	    // Apply crop
+	    int height = cv_img.rows;
+	    int width = cv_img.cols;
+
+	    int h_off = 0;
+	    int w_off = 0;
+	    if (crop_height>0 && crop_width>0) {
+	      h_off = caffe_rng_rand() % (height - crop_height + 1);
+	      w_off = caffe_rng_rand() % (width - crop_width + 1);
+	      cv::Rect myROI(w_off, h_off, crop_width, crop_height);
+	      cv_img = cv_img(myROI);
+	      cv_lab = cv_lab(myROI);
+	    }
+
+	    // Apply transformations (mirror, crop...) to the image
+	    int offset = this->prefetch_data_.offset(item_id);
+	    this->transformed_data_.set_cpu_data(prefetch_data + offset);
+	    this->data_transformer_->Transform(cv_img, &(this->transformed_data_));
+	    // transform label the same way
+	    int label_offset = this->prefetch_label_.offset(item_id);
+	    this->transformed_label_.set_cpu_data(prefetch_label + label_offset);
+
+	    this->data_transformer_->Transform(cv_lab, &this->transformed_label_, true);
+	    CHECK(!this->layer_param_.transform_param().mirror() &&
+	        this->layer_param_.transform_param().crop_size() == 0)
+	        << "FIXME: Any stochastic transformation will break layer due to "
+	        << "the need to transform input and label images in the same way";
+	    trans_time += timer.MicroSeconds();
+
+	    // go to the next iter
+	    lines_id_++;
+	    if (lines_id_ >= lines_size) {
+	      // We have reached the end. Restart from the first.
+	      DLOG(INFO) << "Restarting data prefetching from start.";
+	      lines_id_ = 0;
+	      if (this->layer_param_.dense_image_data_param().shuffle()) {
+	        ShuffleImages();
+	      }
+	    }
+	  }
+	  batch_timer.Stop();
+	  DLOG(INFO) << "Prefetch batch: " << batch_timer.MilliSeconds() << " ms.";
+	  DLOG(INFO) << "     Read time: " << read_time / 1000 << " ms.";
+	  DLOG(INFO) << "Transform time: " << trans_time / 1000 << " ms.";
+
 }
 
 // This function is used to create a thread that prefetches the data.

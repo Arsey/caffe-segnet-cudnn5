@@ -49,6 +49,10 @@ class Layer {
         }
       }
     }
+
+  //FIX reinit
+  virtual void reInitInputLayer() {}
+
   virtual ~Layer() {}
 
   /**

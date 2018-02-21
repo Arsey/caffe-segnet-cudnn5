@@ -297,10 +297,11 @@ BOOST_PYTHON_MODULE(_caffe) {
           bp::default_call_policies(), (bp::arg("network_file"), "phase",
             bp::arg("level")=0, bp::arg("stages")=bp::object(),
             bp::arg("weights")=bp::object())))
-    // Legacy constructor
+    // Legacy constructor //FIX - .def("reinitInputBlob", &Net<Dtype>::reinitInputBlob)
     .def("__init__", bp::make_constructor(&Net_Init_Load))
     .def("_forward", &Net<Dtype>::ForwardFromTo)
     .def("_backward", &Net<Dtype>::BackwardFromTo)
+    .def("reinitInputBlob", &Net<Dtype>::reinitInputBlob)
     .def("reshape", &Net<Dtype>::Reshape)
     .def("clear_param_diffs", &Net<Dtype>::ClearParamDiffs)
     // The cast is to select a particular overload.
